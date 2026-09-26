@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trace-bridge"
+version = "0.3.0"
+description = "Translate coding-agent trajectories through a shared operation IR."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+dependencies = [
+    "pyarrow>=14",
+    "jsonschema>=4.18",
+    "httpx>=0.25",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+trace-bridge = "trace_bridge.run:main"
+trace-bridge-export = "trace_bridge.export_training:main"
+trace-bridge-backfill = "trace_bridge.llm_backfill:main"
+trace-bridge-audit = "trace_bridge.validate_training:main"
+trace-bridge-audit-backfill = "trace_bridge.validate_backfill:main"
+trace-bridge-reuse-context = "trace_bridge.reuse_context:main"
+
+[tool.setuptools]
+packages = ["trace_bridge"]
+
+[tool.setuptools.package-data]
+trace_bridge = ["training_profiles.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
