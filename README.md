@@ -1,120 +1,80 @@
-# Trace Bridge
+# TraceBridge
 
-Trace Bridge translates recorded coding-agent trajectories into training dialogues
-for OpenHands SDK and SWE-agent. Source calls are parsed into an operation IR,
-compiled against a fixed target tool interface, and exported with message-level
-supervision masks.
+**Interaction-Aware Trajectory Rewriting across Harnesses for Coding Agent Training**
 
-This is the review release, version 0.3.0. It includes the converter, training
-exporter, optional LLM backfill client, and existing tests. Datasets, experiment
-logs, service credentials, and model checkpoints are not included.
+TraceBridge rewrites existing coding-agent trajectories for supervised fine-tuning
+(SFT) under a target harness, considering source actions together with their context
+and feedback:
+
+- **Action adaptation:** compile supported operations into target calls using tool
+  contracts and recorded evidence.
+- **Context preservation:** retain unmapped interactions as summaries with complete
+  source fragments and zero direct training loss.
+
+Sources: SWE-agent, mini-swe-agent, OpenHands, Claude Code, OpenCode, and Codex-format.
+Targets: OpenHands SDK (`openhands_sdk`) and SWE-agent (`sweagent`).
+
+This review release (v0.3.0) provides the converter, training exporter, LLM client,
+and tests. Datasets, experiment logs, and model checkpoints are not included.
 
 ## Install
 
-Use Python 3.11 or later on Linux.
+Use Python 3.11+ on Linux.
 
-    python -m pip install -e .
+```bash
+python -m pip install -e .
+```
 
-Compilation does not require a running agent harness. Generated shell operations
-assume Bash; file operations may also use GNU sed, ripgrep, and coreutils. Tool
-schemas are included in the package. See [third-party notices](THIRD_PARTY_NOTICES.md)
-for their provenance.
+Conversion runs offline without a running agent harness. Generated commands assume
+Bash and may use GNU sed, ripgrep, and coreutils.
 
-## Pipeline
+## How it works
 
-    Source messages, tool definitions, and loss masks
-        -> source parsers
-        -> operation IR
-        -> target plans
-        -> staged dialogues and rewrite requests
-        -> optional LLM review or context rewriting
-        -> SFT Parquet
+1. Parse source messages, tool definitions, and loss masks into an operation IR.
+2. Compile target calls, checking operation conditions and feedback bindings.
+3. Review eligible candidates with an LLM and program checks; rewrite remaining
+   interactions as context.
+4. Merge outputs in source order and export SFT Parquet with supervision masks
+   and provenance.
 
-Supported source identifiers are SWE-agent, mini-swe-agent, OpenHands, Claude Code,
-OpenCode, and Codex-format. Targets are openhands_sdk and sweagent.
+Converted actions inherit source masks; tool observations and retained context
+have zero loss. Observations come from recorded source feedback. Downstream
+trainers must honor `message_loss_mask`.
 
-The IR represents patches, writes, replacements, reads, searches, glob operations,
-deletions, shell commands, editor actions, and completion/thought actions. Unsupported
-source interactions retain their original records for context rewriting.
+## Quick start
 
-## Small example
+Create six synthetic records and prepare training exports:
 
-The example script creates six synthetic records with supplied observations. It
-does not run the commands in those records.
+```bash
+python examples/make_demo.py --out data/demo.parquet
+python -m trace_bridge --source data/demo.parquet --out runs/demo-compiled
+python -m trace_bridge.export_training prepare --source data/demo.parquet --compiled runs/demo-compiled --out runs/demo-stage
+```
 
-    python examples/make_demo.py --out data/demo.parquet
-    python -m trace_bridge --source data/demo.parquet --out runs/demo-compiled
-    python -m trace_bridge.export_training prepare --source data/demo.parquet --compiled runs/demo-compiled --out runs/demo-stage
+Each target's `ready.parquet` contains records with no pending rewrite requests.
+Staged files retain all input rows; complete pending requests before exporting the
+full dataset. The demo supplies observations without executing source commands.
 
-The two target ready.parquet files under runs/demo-stage contain rows with no
-outstanding rewrite requests. The staged files retain every input row. On a real
-dataset, ready.parquet may contain only a subset until backfill is complete.
+See [data format](docs/data-format.md) for input fields and masks, and
+[workflow](docs/workflow.md) for LLM processing and final export.
 
-See [the data format](docs/data-format.md) for the input schema and loss-mask
-handling, and [the workflow](docs/workflow.md) for backfill and final export.
+## Version notes
 
-## Operation compilation
-
-    from trace_bridge.ir import CompileContext, Operation
-    from trace_bridge.targets import compile_operation
-
-    operation = Operation(
-        "write_file",
-        {"path": "/repo/example.py", "content": "value = 1\n", "mode": "overwrite"},
-    )
-    plan = compile_operation(operation, "sweagent", CompileContext())
-    calls = plan.wire_calls("source-call-1")
-
-A ready plan can be serialized into target calls. A conditional plan has candidate
-actions with unresolved requirements; an unsupported plan has no executable action.
-The exporter handles unresolved interactions through the rewrite queue.
-
-## Shell representation
-
-Per-call non-login commands use a subshell with an unescaped body:
-
-    (
-    cd -- /repo || exit $?
-    cat > example.py <<'EOF'
-    value = 1
-    EOF
-    )
-
-Codex login commands retain bash -lc. A quoted heredoc loads the command into a
-subshell-local variable; the launcher passes that variable as one argument. This
-preserves embedded quotes, trailing newlines, and the command's original stdin.
-The heredoc delimiter is selected to avoid collisions with the command body.
-
-Explicit workdir changes are confined to the current call. File writes use
-literal heredocs or printf; replace-all uses GNU sed with staged output; deletions
-use test -f followed by rm.
-
-## Scope
-
-The converter preserves recorded source observations and their provenance. It does
-not execute trajectories or synthesize target observations. A ready plan is a
-compilation result, not a task-success label.
-
-Unknown timeout lifecycle, glob policies, patch preimages, and mutation ordering
-remain requirements. All input rows retain a train split, with the original split
-stored separately. Downstream trainers must honor message_loss_mask.
-
-This release changes command generation relative to the v2 experimental artifacts.
-Use a fresh compile/staging directory for v3. Existing v2 Parquet files have not
-been regenerated, and the earlier experimental measurements describe those files.
+Version 0.3.0 changes command generation from the v2 experimental artifacts. Use
+fresh compile/staging directories. The paper's measurements describe the existing
+v2 exports, which have not been regenerated.
 
 ## Tests
 
-The existing tests are included for reviewers. They were not rerun for this release.
+```bash
+python -m pip install -e '.[test]'
+python -m pytest tests
+```
 
-    python -m pip install -e '.[test]'
-    python -m pytest tests
-
-Optional SWE-agent editor integration tests use the SWE_AGENT_TOOLS environment
-variable, pointing to a SWE-agent tools directory. They are skipped if the editor
-is unavailable.
+Tests are included but were not rerun for this release. Optional editor integration
+tests require `SWE_AGENT_TOOLS` to point to a SWE-agent tools directory.
 
 ## License
 
-Project code is distributed under the [MIT license](LICENSE). Included upstream
-tool definitions retain their [third-party notices](THIRD_PARTY_NOTICES.md).
+Project code uses the [MIT license](LICENSE). Bundled tool definitions retain their
+[third-party notices](THIRD_PARTY_NOTICES.md).
